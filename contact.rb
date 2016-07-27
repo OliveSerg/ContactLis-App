@@ -2,7 +2,7 @@ require 'csv'
 require 'pry'
 
 ARGV << "help" if ARGV.empty?
-input = ARGV.shift
+input = ARGV.join(" ")
 # Represents a person in an address book.
 # The ContactList class will work with Contact objects instead of interacting with the CSV file directly
 class Contact
@@ -86,7 +86,6 @@ class Contact
 
 end
 
-
 case input
 when "help"
   pp "Here is a list of available commands:"
@@ -110,10 +109,12 @@ when "new"
   id = file.length + 1
   Contact.create(fullname, email, id)
   p "Your contact has been created with Id: #{id}"
-when "show"
-  Contact.find("contact_list.csv", 5)
-when "search"
-  Contact.search("contact_list.csv", "example")
+when /(show)\s\d+/
+  id = /\d+/.match(input).to_s.to_i
+  Contact.find("contact_list.csv", id)
+when /(search)\s\w+/
+  search = /\s\w+/.match(input).to_s.strip
+  Contact.search("contact_list.csv", search)
 else
   nil
 end
