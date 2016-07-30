@@ -6,7 +6,7 @@ input = ARGV.join(" ")
 # Represents a person in an address book.
 # The ContactList class will work with Contact objects instead of interacting with the CSV file directly
 class Contact
-
+  LIST = "contact_list.csv"
   attr_accessor :name, :email
 
   def initialize(name, email, id)
@@ -17,7 +17,7 @@ class Contact
   end
 
   def email=(email)
-    list = Contact.all("contact_list.csv")
+    list = Contact.all(LIST)
     list = list.select do |value|
       value if value.include?(email)
     end
@@ -37,10 +37,17 @@ class Contact
       File.open(file).readlines.map {|line| line.chomp}
     end
 
+    def dup_email?(email)
+      match_email = File.open(LIST).readlines do |line|
+        line.split(",").select {|match| match == email }
+      end
+      match_email.include?(email)
+    end
 
-    def create(name, email, id)
-        Contact.new(name, email, id)
-        File.open("contact_list.csv", "a") {|file| file.puts name + "," + email + "," + id.to_s}
+    def create(name, email, phone_number, id)
+      unless dup_email?(email)
+        Contact.new(name, email, phone_number, id)
+        File.open(LIST, "a") {|file| file.puts name + "," + email + "," + id.to_s}
     end
 
     def find(file, id)
@@ -97,10 +104,10 @@ when "list"
   Contact.display_list("contact_list.csv")
 when "new"
   p "Please provide a full name."
-  fullname = gets.chomp.split.map{|words| words.capitalize}.join(' ')
+  fullname = STDIN.gets.chomp.split.map{|words| words.capitalize}.join(' ')
 
   p "Please provide an email."
-  email = gets.chomp
+  email = STDIN.gets.chomp
 
   file = File.open("contact_list.csv") do |file|
     file.readlines.each_with_index {|line, index| index if file.eof?}
