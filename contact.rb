@@ -1,96 +1,104 @@
 require 'csv'
 require 'pry'
+require 'pg'
 
 ARGV << "help" if ARGV.empty?
 input = ARGV.join(" ")
 # Represents a person in an address book.
 # The ContactList class will work with Contact objects instead of interacting with the CSV file directly
 class Contact
-  LIST = "contact_list.csv"
+
+  DB = PG.connect({
+          host: 'localhost',
+          dbname: 'contact_database',
+          user: 'development',
+          password: 'development'
+          })
+  TABLE = 'contacts'
+
   attr_accessor :name, :email
+  attr_reader :id
 
-  def initialize(name, email, id)
-    # TODO: Assign parameter values to instance variables.
-    @name = name
-    self.email = email
-    @id = id
+  def initialize(params={})
+    @name = params[:name]
+    @email = params[:email]
+    @id = params[:id]
   end
 
-  def email=(email)
-    list = Contact.all(LIST)
-    list = list.select do |value|
-      value if value.include?(email)
-    end
-    list = list.map do |value|
-      value.split(",")
-    end
-    if email == nil || email.size == 0 || email == list[1]
-      p "Duplicate!!"
+
+  def saved?
+    !!@id
+  end
+
+  def save
+    if saved?
+      DB.exec_params("UPDATE #{TABLE} SET name=$1, email=$2 WHERE id=$3;", [@name, @email, @id])
     else
-      @email = email
+      fields = {name: @name, email: @email}
+      Contact.create(fields)
     end
   end
-  # Provides functionality for managing contacts in the csv file.
+
+  def delete
+    return unless saved? # We can only proceed if we have an id
+    DB.exec("DELETE from #{TABLE} where id=#{@id};")
+    self
+  end
+
+
+
   class << self
 
-    def all(file)
-      File.open(file).readlines.map {|line| line.chomp}
+    def all
+      DB.exec("SELECT * from #{TABLE};").map {|contact| instance_from_row(contact)}
+    end
+
+    def create(fields)
+      if dup_email?(fields[:email])
+        result = DB.exec_params(
+          "INSERT INTO #{TABLE} (name, email) VALUES ($1, $2) RETURNING id",
+          [fields[:name], fields[:email]]
+        )
+        Contact.new(fields.merge(id: result[0]['id'].to_i))
+      end
+    end
+
+    def method_missing(method_name, *arguments)
+      method_name = method_name.to_s
+      arguments = arguments.first
+      if method_name == 'find'
+        # id = method_name.spilt("_").select {|value| value.is_an_integer?}
+        # id = method_name.scan(/\d+/)
+        result = DB.exec_params("SELECT * from #{TABLE} where id=$1::int;", [arguments])
+        return nil if result.values.empty?
+        instance_from_row(result.first)
+      elsif /(find_by_)\w+\z/.match(method_name)
+        find_by = method_name.split("_").last
+        result = DB.exec_params("SELECT * from #{TABLE} where #{find_by} ILIKE $1;", ["%#{arguments}%"])
+        return [] if result.values.empty?
+        result.map {|contact| instance_from_row(contact)}
+      else
+        "Method #{method_name} does not exist"
+      end
+    end
+
+    private
+
+    def instance_from_row(row)
+      Contact.new({
+        id: row['id'].to_i,
+        name: row['name'],
+        email: row['email']
+      })
     end
 
     def dup_email?(email)
-      match_email = File.open(LIST).readlines do |line|
-        line.split(",").select {|match| match == email }
-      end
-      match_email.include?(email)
-    end
-
-    def create(name, email, phone_number, id)
-      unless dup_email?(email)
-        Contact.new(name, email, phone_number, id)
-        File.open(LIST, "a") {|file| file.puts name + "," + email + "," + id.to_s}
-    end
-
-    def find(file, id)
-      list = Contact.all(file)
-      list = list.select do |value|
-        value if value.split(",").include?(id.to_s)
-      end
-      list = list.first.split(",")
-      if list.any?
-        p "Name: #{list[0]}"
-        p "Email: #{list[1]}"
-        p "Id: #{list[2]}"
-      else
-        p "Not found"
-      end
-    end
-
-    def search(file, term)
-      list = Contact.all(file)
-      list = list.select do |value|
-        value if value.include?(term)
-      end
-      list = list.map do |value|
-        value.split(",")
-      end
-      if list.any?
-        list.each do |value|
-          p "Name: #{value[0]}"
-          p "Email: #{value[1]}"
-          p "Id: #{value[2]}"
-        end
-      else
-        p "Not found"
-      end
-    end
-
-    def display_list(file)
-      raise "This is not a csv file" unless file.split(".").last == "csv"
-      File.open(file).readlines.each {|line| p line.chomp}
+      match_email = DB.exec_params("SELECT * from #{TABLE} where email=$1::text;", [email])
+      match = match_email.select {|contact| contacthas_value?(email)}
+      match.empty?
     end
 
   end
-
 end
 
 case input
@@ -98,10 +106,15 @@ when "help"
   pp "Here is a list of available commands:"
   p "   new     - Create a new contact"
   p "   list    - List all contacts"
-  p "   show    - show a contact"
-  p "   search  - Search contacts"
+  p "   show    - show a contact by: name or email or an ID"
+  p "   update  - Update contact"
+  p "   delete  - Delete specified ID"
+
 when "list"
-  Contact.display_list("contact_list.csv")
+   Contact.all.each do |contact|
+     p contact
+   end
+
 when "new"
   p "Please provide a full name."
   fullname = STDIN.gets.chomp.split.map{|words| words.capitalize}.join(' ')
@@ -109,19 +122,110 @@ when "new"
   p "Please provide an email."
   email = STDIN.gets.chomp
 
-  file = File.open("contact_list.csv") do |file|
-    file.readlines.each_with_index {|line, index| index if file.eof?}
-  end
+  contact_details = {name: fullname, email: email}
 
-  id = file.length + 1
-  Contact.create(fullname, email, id)
-  p "Your contact has been created with Id: #{id}"
+  contact = Contact.create(contact_details)
+  p "Your contact has been created with Id: #{contact.id}"
+
 when /(show)\s\d+/
   id = /\d+/.match(input).to_s.to_i
-  Contact.find("contact_list.csv", id)
-when /(search)\s\w+/
+  p Contact.find(id)
+
+when /(delete)\s\d+/
+  id = /\d+/.match(input).to_s.to_i
+  contact = Contact.find(id)
+  deleted_contact = contact.delete
+  p "You have deleted #{deleted_contact}"
+
+when /(show_name)\s\w+/
   search = /\s\w+/.match(input).to_s.strip
-  Contact.search("contact_list.csv", search)
+  p Contact.find_by_name(search)
+
+when /(show_email)\s\w+@\w+\.\w+/
+  search = /\s\w+/.match(input).to_s.strip
+  p Contact.find_by_email(search)
+
+when /(update)\s\d+/
+  id = /\d+/.match(input).to_s.to_i
+  contact = Contact.find(id)
+  p contact
+  p "New name?"
+  response = STDIN.gets.chomp
+  contact.name = STDIN.gets.chomp.split.map{|words| words.capitalize}.join(' ') if response == "yes"
+  p "New email?"
+  response = STDIN.gets.chomp
+  contact.email = STDIN.gets.chomp if response == "yes"
+  binding.pry
+
+  p "Are you ok with?"
+  p "Name: #{contact.name} and Email: #{contact.email}"
+  response = STDIN.gets.chomp
+  contact.save if response == "yes"
+
 else
   nil
 end
+
+#TODO Impliment a way to input the function youd like to call
+# if false
+#   p "What would you like to update"
+#   response = STDIN.gets.chomp
+# end
+# def dup_email?(email)
+#   match_email = File.open(LIST).readlines do |line|
+#     line.split(",").select {|match| match == email }
+#   end
+#   match_email.include?(email)
+# end
+#
+# def find(file, id)
+#   list = Contact.all(file)
+#   list = list.select do |value|
+#     value if value.split(",").include?(id.to_s)
+#   end
+#   list = list.first.split(",")
+#   if list.any?
+#     p "Name: #{list[0]}"
+#     p "Email: #{list[1]}"
+#     p "Id: #{list[2]}"
+#   else
+#     p "Not found"
+#   end
+# end
+#
+# def search(file, term)
+#   list = Contact.all(file)
+#   list = list.select do |value|
+#     value if value.include?(term)
+#   end
+#   list = list.map do |value|
+#     value.split(",")
+#   end
+#   if list.any?
+#     list.each do |value|
+#       p "Name: #{value[0]}"
+#       p "Email: #{value[1]}"
+#       p "Id: #{value[2]}"
+#     end
+#   else
+#     p "Not found"
+#   end
+# end
+#
+# def display_list(file)
+#   raise "This is not a csv file" unless file.split(".").last == "csv"
+#   File.open(file).readlines.each {|line| p line.chomp}
+# end
+
+# def email=(email)
+#   list = Contact.all(LIST).select do |value|
+#     value if value.include?(email)
+#   end
+#   list = list.map {|value| value.split(",")}
+#   if email == nil || email.size == 0 || email == list[1]
+#     p "Duplicate!!"
+#   else
+#     @email = email
+#   end
+# end
+# Provides functionality for managing contacts in the csv file.
