@@ -19,15 +19,16 @@ ActiveRecord::Base.establish_connection(
 
 puts "WE'RE IN!!"
 puts "Setting up stuff you need~~"
+if !ActiveRecord::Base.connection.table_exists?(:contacts)
+  ActiveRecord::Schema.define do
+  # drop_table :contacts, force: :cascade if ActiveRecord::Base.connection.table_exists?(:contacts)
 
-ActiveRecord::Schema.define do
-  drop_table :contacts, force: :cascade if ActiveRecord::Base.connection.table_exists?(:contacts)
-
-  create_table :contacts do |contacts|
-    contacts.column :name, :string
-    contacts.column :email, :string
+    create_table :contacts do |contact|
+      contact.column :name, :string
+      contact.column :email, :string
+      contact.timestamps null: false
+    end
   end
-
-  puts "Done done!!"
-
 end
+
+puts "Done done!!"
